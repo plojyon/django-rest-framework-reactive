@@ -12,15 +12,6 @@ from .models import Observer, Subscriber
 from .observer import QueryObserver
 from .protocol import *
 
-# Maximum number of cached observer executors.
-MAX_CACHED_EXECUTORS = 1024
-# Throttle constants
-THROTTLE_CACHE_PREFIX = 'rest_framework_reactive_throttle_'
-
-
-def throttle_cache_key(observer_id):
-    return '{}{}'.format(THROTTLE_CACHE_PREFIX, observer_id)
-
 
 class MainConsumer(AsyncConsumer):
     """Consumer for polling observers."""
@@ -30,7 +21,8 @@ class MainConsumer(AsyncConsumer):
 
         @database_sync_to_async
         def get_observers(table):
-            # Find all observers with dependencies on the given table.
+            """Find all observers with dependencies on the given table."""
+
             return list(
                 Observer.objects.filter(
                     dependencies__table=table, subscribers__isnull=False
@@ -45,76 +37,6 @@ class MainConsumer(AsyncConsumer):
             await self.channel_layer.send(
                 CHANNEL_WORKER, {'type': TYPE_EVALUATE, 'observer': observer_id}
             )
-
-    async def observer_poll(self, message):
-        """Poll observer after a delay."""
-        # Sleep until we need to notify the observer.
-        await asyncio.sleep(message['interval'])
-
-        # Dispatch task to evaluate the observable.
-        await self.channel_layer.send(
-            CHANNEL_WORKER, {'type': TYPE_EVALUATE, 'observer': message['observer']}
-        )
-
-
-class WorkerConsumer(AsyncConsumer):
-    """Worker consumer."""
-
-    def __init__(self, *args, **kwargs):
-        """Construct observer worker consumer."""
-        self._executor_cache = collections.OrderedDict()
-
-    async def _evaluate(self, observer_id):
-        # Get Observer from database.
-        @database_sync_to_async
-        def get_observer(observer_id):
-            try:
-                return Observer.objects.only('pk', 'request').get(pk=observer_id)
-            except Observer.DoesNotExist:
-                return None
-
-        observer = await get_observer(observer_id)
-        if not observer:
-            return
-
-        # Get QueryObserver executor from cache and evaluate.
-        try:
-            executor = self._executor_cache[observer.pk]
-            self._executor_cache.move_to_end(observer.pk)
-        except KeyError:
-            executor = QueryObserver(pickle.loads(observer.request))
-            self._executor_cache[observer.pk] = executor
-            if len(self._executor_cache) > MAX_CACHED_EXECUTORS:
-                self._executor_cache.popitem(last=False)
-
-        await executor.evaluate()
-
-    async def observer_evaluate(self, message):
-        """Execute observer evaluation on the worker or throttle."""
-        observer_id = message['observer']
-        throttle_rate = get_queryobserver_settings()['throttle_rate']
-        if throttle_rate <= 0:
-            await self._evaluate(observer_id)
-            return
-
-        cache_key = throttle_cache_key(observer_id)
-        try:
-            count = cache.incr(cache_key)
-            # Ignore if delayed observer already scheduled.
-            if count == 2:
-                await self.channel_layer.send(
-                    CHANNEL_MAIN,
-                    {
-                        'type': TYPE_POLL,
-                        'observer': observer_id,
-                        'interval': throttle_rate,
-                    },
-                )
-        except ValueError:
-            count = cache.get_or_set(cache_key, default=1, timeout=throttle_rate)
-            # Ignore if cache was set and increased in another thread.
-            if count == 1:
-                await self._evaluate(observer_id)
 
 
 class ClientConsumer(JsonWebsocketConsumer):
