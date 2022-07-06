@@ -18,7 +18,6 @@ application = ProtocolTypeRouter(
         'channel': ChannelNameRouter(
             {
                 CHANNEL_MAIN: MainConsumer.as_asgi(),
-                CHANNEL_WORKER: WorkerConsumer.as_asgi(),
             }
         ),
     }

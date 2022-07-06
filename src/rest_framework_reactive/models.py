@@ -32,6 +32,7 @@ class Subscriber(models.Model):
     """Subscriber to an observer."""
 
     session_id = models.CharField(primary_key=True, max_length=100)
+    # TODO: user
     created = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
