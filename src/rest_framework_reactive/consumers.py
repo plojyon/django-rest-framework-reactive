@@ -1,5 +1,6 @@
 import asyncio
 import collections
+import json
 import pickle
 
 from django.db.models import Q
@@ -46,10 +47,37 @@ class ClientConsumer(JsonWebsocketConsumer):
     def websocket_connect(self, message):
         """Called when WebSocket connection is established."""
         self.session_id = self.scope['url_route']['kwargs']['subscriber_id']
+        text = message["text"]
+
+        # TODO: Authenticate
+        data = json.loads(text)
+        if not data.auth:
+            self.close()
+
+        # Accept the connection
         super().websocket_connect(message)
 
-        # Create new subscriber object.
+        # Create new subscriber object
         Subscriber.objects.get_or_create(session_id=self.session_id)
+
+    def receive_json(self, content):
+        """Called when JSON data is received."""
+        table = content["table"]
+        kind = content["kind"]
+        if "item" in content:
+            item = content["item"]
+        else:
+            item = None
+
+        observer = Observer.objects.get_or_create(
+            table=table, resource=item, change_type=kind
+        )
+        subscriber = Subscriber.objects.get(session_id=self.session_id)
+
+        if content["action"] == "subscribe":
+            observer.subscribers.add(subscriber)
+        else:
+            observer.subscribers.remove(subscriber)
 
     @property
     def groups(self):
@@ -62,6 +90,7 @@ class ClientConsumer(JsonWebsocketConsumer):
     def disconnect(self, code):
         """Called when WebSocket connection is closed."""
         Subscriber.objects.filter(session_id=self.session_id).delete()
+        self.close()
 
     def observer_update(self, message):
         """Called when update is received."""
