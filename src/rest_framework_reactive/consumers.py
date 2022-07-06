@@ -2,6 +2,7 @@ import asyncio
 import collections
 import pickle
 
+from django.db.models import Q
 from channels.consumer import AsyncConsumer
 from channels.db import database_sync_to_async
 from channels.generic.websocket import JsonWebsocketConsumer
@@ -20,22 +21,22 @@ class MainConsumer(AsyncConsumer):
         """Process notification from ORM."""
 
         @database_sync_to_async
-        def get_observers(table):
-            """Find all observers with dependencies on the given table."""
+        def get_subscribers(table, item, kind):
+            """Find all subscribers watching a given item in a table."""
+            query = Q(observers__table=table, observers__change_type=kind)
+            query &= Q(observers__resource=item) | Q(observers__resource__isnull=True)
+            return list(Subscriber.objects.filter(query))
 
-            return list(
-                Observer.objects.filter(
-                    dependencies__table=table, subscribers__isnull=False
-                )
-                .distinct('pk')
-                .values_list('pk', flat=True)
-            )
+        table = message['table']
+        item = message['primary_key']
+        kind = message['kind']
 
-        observers_ids = await get_observers(message['table'])
+        subscribers = await get_subscribers(table, item, kind)
 
-        for observer_id in observers_ids:
+        for session_id in subscribers:
             await self.channel_layer.send(
-                CHANNEL_WORKER, {'type': TYPE_EVALUATE, 'observer': observer_id}
+                GROUP_SESSIONS.format(session_id=session_id),
+                {'type': TYPE_ITEM_UPDATE, 'table': table, 'item': item, 'kind': kind},
             )
 
 
@@ -63,16 +64,11 @@ class ClientConsumer(JsonWebsocketConsumer):
         Subscriber.objects.filter(session_id=self.session_id).delete()
 
     def observer_update(self, message):
-        """Called when update from observer is received."""
-        # Demultiplex observer update into multiple messages.
-        for action in ('added', 'changed', 'removed'):
-            for item in message[action]:
-                self.send_json(
-                    {
-                        'msg': action,
-                        'observer': message['observer'],
-                        'primary_key': message['primary_key'],
-                        'order': item['order'],
-                        'item': item['data'],
-                    }
-                )
+        """Called when update is received."""
+        self.send_json(
+            {
+                'table': message['table'],
+                'item': message['item'],
+                'kind': message['kind'],
+            }
+        )

@@ -1,52 +1,31 @@
 from django.db import models
 
+from .protocol import *
+
 
 class Observer(models.Model):
     """State of an observer."""
 
+    CHANGE_TYPES = (
+        ORM_NOTIFY_KIND_CREATE,
+        ORM_NOTIFY_KIND_UPDATE,
+        ORM_NOTIFY_KIND_DELETE,
+    )
+
     id = models.CharField(primary_key=True, max_length=64)
-    request = models.BinaryField()
-    last_evaluation = models.DateTimeField(null=True)
-    poll_interval = models.IntegerField(null=True)
+
+    # table of the observed resource
+    table = models.CharField(max_length=100)
+    # primary key of the observed resource (null if watching the whole table)
+    resource = models.IntegerField(null=True)
+    change_type = models.CharField(choices=CHANGE_TYPES)
     subscribers = models.ManyToManyField('Subscriber')
 
     def __str__(self):
         return 'id={id}'.format(id=self.id)
 
-
-class Item(models.Model):
-    """Item part of the observer's result set."""
-
-    observer = models.ForeignKey(
-        Observer, related_name='items', on_delete=models.CASCADE
-    )
-    primary_key = models.CharField(max_length=200)
-    order = models.IntegerField()
-    data = models.JSONField()
-
     class Meta:
-        unique_together = (('observer', 'order'), ('observer', 'primary_key'))
-        ordering = ('observer', 'order')
-
-    def __str__(self):
-        return 'primary_key={primary_key} order={order} data={data}'.format(
-            primary_key=self.primary_key, order=self.order, data=repr(self.data)
-        )
-
-
-class Dependency(models.Model):
-    """Observer's dependency."""
-
-    observer = models.ForeignKey(
-        Observer, related_name='dependencies', on_delete=models.CASCADE
-    )
-    table = models.CharField(max_length=100)
-
-    class Meta:
-        unique_together = ('observer', 'table')
-
-    def __str__(self):
-        return 'table={table}'.format(table=self.table)
+        unique_together = ('table', 'resource_pk', 'change_type')
 
 
 class Subscriber(models.Model):
