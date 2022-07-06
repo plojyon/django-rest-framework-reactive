@@ -47,30 +47,18 @@ def notify_observers(table, kind, primary_key=None):
     if not Observer.objects.filter(dependencies__table=table).exists():
         return
 
-    def handler():
-        """Send a notification to the given channel."""
-        try:
-            async_to_sync(get_channel_layer().send)(
-                CHANNEL_MAIN,
-                {
-                    'type': TYPE_ORM_NOTIFY,
-                    'table': table,
-                    'kind': kind,
-                    'primary_key': str(primary_key),
-                },
-            )
-        except ChannelFull:
-            logger.exception("Unable to notify workers.")
-
-    batcher = PrioritizedBatcher.global_instance()
-    if batcher.is_started:
-        # If a batch is open, queue the send via the batcher.
-        batcher.add(
-            'rest_framework_reactive', handler, group_by=(table, kind, primary_key)
+    try:
+        async_to_sync(get_channel_layer().send)(
+            CHANNEL_MAIN,
+            {
+                'type': TYPE_ORM_NOTIFY,
+                'table': table,
+                'kind': kind,
+                'primary_key': str(primary_key),
+            },
         )
-    else:
-        # If no batch is open, invoke immediately.
-        handler()
+    except ChannelFull:
+        logger.exception("Unable to notify workers.")
 
 
 @dispatch.receiver(model_signals.post_save)
